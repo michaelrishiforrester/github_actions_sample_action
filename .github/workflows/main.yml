@@ -1,0 +1,50 @@
+name: CI/CD Pipeline with Observability
+on: [push]
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+      - name: Set Up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '14'
+      - name: Cache Dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+      - name: Install Dependencies
+        run: npm install
+      - name: Run Tests
+        run: npm test
+        continue-on-error: true
+      - name: Collect Test Results
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: test-results.xml
+      - name: Send Metrics to Prometheus
+        uses: matrtzen/prometheus-pushgateway-action@v1
+        with:
+          job_name: 'ci_pipeline'
+          metrics: |
+            build_duration_seconds{status="success"} $BUILD_DURATION
+            test_failures{status="failure"} $TEST_FAILURES
+      - name: Instrument Application with OpenTelemetry
+        uses: open-telemetry/opentelemetry-collector-action@v1
+      - name: Deploy Application
+        if: github.ref == 'refs/heads/main'
+        run: ./deploy.sh
+      - name: Validate Deployment
+        run: ./validate-deployment.sh
+      - name: Notify on Deployment
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: 'Deployment completed for ${{ github.repository }}'
+      - name: Post-Deployment Monitoring
+        run: |
+          # Check application health and log metrics
